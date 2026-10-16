@@ -1,4 +1,4 @@
-This app is a simple chatbox handling multiple clients.
+This app is a simple chatbox handling multiple clients. For now, it only connects to localhost.
 Each client has a dedicated thread. This struture needs to change if scaled to tens of clients.
 
 It uses tkinter as framework to generate the GUI.
