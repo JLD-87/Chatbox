@@ -6,9 +6,12 @@ import tkinter.scrolledtext as st
 from tkinter import simpledialog
 import json
 import queue
+import os
 
-HOST ='127.0.0.1'
-PORT = 5000
+#LOCALHOST='127.0.0.1'
+#PORT = 5000
+HOST=os.getenv('HOST')
+PORT = os.getenv('PORT')
 
 class Client:
     def __init__(self,HOST,PORT):
@@ -60,6 +63,10 @@ class Client:
         self.send_button.config(font=("Arial", 12))
         self.send_button.pack(padx=20, pady=5)
 
+        self.ask_button = tk.Button(frame1, text="Ask AI", command=self.ask_ai)
+        self.ask_button.config(font=("Arial", 12))
+        self.ask_button.pack(padx=20, pady=5)
+
         # ===== Frame 2 =====
         frame2 = ttk.Frame(self.win, relief="ridge", padding=5, width=200)
         frame2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
@@ -72,9 +79,17 @@ class Client:
         self.win.after(50, self.process_gui_events)
         self.win.mainloop()
 
+    def ask_ai(self):
+        question = self.input_area.get('1.0', 'end').strip()
+        if question:
+            question_dump = json.dumps({"type": "ASK_AI", "user": self.nickname, "content": question}).encode('utf-8')
+            self.sock.send(question_dump)
+            self.input_area.delete('1.0', 'end')
+
     def write(self):
         message = f"{self.nickname}: {self.input_area.get('1.0', 'end')}"
-        self.sock.send(message.encode('utf-8'))
+        message_dump = json.dumps({"type": "MESSAGE", "content": message}).encode('utf-8')
+        self.sock.send(message_dump)
         self.input_area.delete('1.0', 'end')
 
     def stop(self):
