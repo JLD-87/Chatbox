@@ -1,3 +1,4 @@
+from multiprocessing import context
 import socket
 import threading
 import tkinter as tk
@@ -7,16 +8,27 @@ from tkinter import simpledialog
 import json
 import queue
 import os
+import ssl
+from dotenv import load_dotenv
+load_dotenv()
 
 #LOCALHOST='127.0.0.1'
 #PORT = 5000
 HOST=os.getenv('HOST')
-PORT = os.getenv('PORT')
+print(f"Connecting to server at {HOST}:{os.getenv('PORT')}")
+PORT = int(os.getenv('PORT'))
 
 class Client:
     def __init__(self,HOST,PORT):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # Wrap the socket with SSL
+        context = ssl.create_default_context()
+        context.load_verify_locations('./cert.pem')
+        self.sock = context.wrap_socket(self.sock, server_hostname=HOST)
+
+
         self.sock.connect((HOST, PORT))
+        print(f"Connecting to server at {HOST}:{PORT} with SSL")
 
         msg=tk.Tk()
         msg.withdraw()

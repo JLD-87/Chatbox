@@ -3,35 +3,63 @@ import threading
 import json
 import requests
 import os
+import ssl
+from dotenv import load_dotenv
+
+#load environment variables from .env file
+load_dotenv()
 
 HOST ='0.0.0.0' #localhost='127.0.0.1'
 PORT = 5000
 llm_api_key=os.getenv('LLM_API_KEY')
 
+send_lock = threading.Lock()  # Create a lock for sending messages
+
+# Create a TCP socket
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind((HOST,PORT))
 server.listen()
 
+# Wrap socket with SSL
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
+
+
+# Save TLS secured sockets and nicknames in lists
 clients = []
 nicknames = []
 
 def broadcast(message):
     message_dumped = json.dumps({"type": "MESSAGE", "content": message.decode('utf-8')}).encode('utf-8')
     print(f"Broadcasting message: {message.decode('utf-8')}")
-    for client in clients:
-        client.send(message_dumped)
+    with send_lock:
+        for tls_client in clients:
+            tls_client.sendall(message_dumped)
 
 
 def broadcast_list_clients():
     client_list = json.dumps({"type": "CLIENT_LIST", "content": nicknames}).encode('utf-8')
     print(f"Broadcasting client list: {nicknames}")
-    for client in clients:
-        client.send(client_list)
+    for tls_client in clients:
+        tls_client.send(client_list)
 
 def handle_client(client):
     try:
+        tls_client = context.wrap_socket(client, server_side=True)
+        print(f"TLS connection established with {tls_client.getpeername()}")
+        nickname_request=json.dumps({"type": "NICK", "content": ""}).encode('utf-8')
+        tls_client.send(nickname_request)
+        nickname = tls_client.recv(1024).decode('utf-8')
+        nicknames.append(nickname)
+        clients.append(tls_client)
+        broadcast_list_clients()
+
+        print(f"Nickname of the client is {nickname}")
+        broadcast(f"{nickname} has joined the chat!\n".encode('utf-8'))
+
         while True:
-            message = client.recv(1024).decode('utf-8')
+            message = tls_client.recv(1024).decode('utf-8')
+            print(f"{message}")
             message=json.loads(message)
 
             if message['type'] == 'ASK_AI':
@@ -42,7 +70,7 @@ def handle_client(client):
                 response_message = f"AI answered: {answer}"
                 broadcast(response_message.encode('utf-8'))
             elif message['type'] == 'MESSAGE':
-                print(f"{nicknames[clients.index(client)]} sent message: {message}")
+                print(f"{nicknames[clients.index(tls_client)]} sent message: {message}")
                 broadcast(message['content'].encode('utf-8'))
 
     except (ConnectionError, OSError) as error:
@@ -51,17 +79,17 @@ def handle_client(client):
     finally:
         print("A client has disconnected.")
 
-        if client in clients:
-            index = clients.index(client)
+        if tls_client in clients:
+            index = clients.index(tls_client)
             nickname = nicknames[index]
 
             clients.pop(index)
             nicknames.pop(index)
 
-            client.close()
+            tls_client.close()
             broadcast_list_clients()
         else:
-            client.close()
+            tls_client.close()
 
 def receive_connections():
     print(f"Server is listening on port {PORT}...")
@@ -70,16 +98,7 @@ def receive_connections():
         client, address = server.accept()
         print(f"Connection established with {str(address)}")
 
-        nickname_request=json.dumps({"type": "NICK", "content": ""}).encode('utf-8')
-        client.send(nickname_request)
-        nickname = client.recv(1024).decode('utf-8')
-        nicknames.append(nickname)
-        clients.append(client)
-        broadcast_list_clients()
-
-        print(f"Nickname of the client is {nickname}")
-        broadcast(f"{nickname} has joined the chat!\n".encode('utf-8'))
-
+        # Start a new thread to handle the client
         thread = threading.Thread(target=handle_client, args=(client,))
         thread.start()
 
