@@ -8,7 +8,8 @@ multiple clients can connect,
 messages sent and received, 
 connected client list shown,
 connection is encrypted with TLS (server's identity is verified by certificate),
-lock is implemented on broadcasting (messages do not appear in the middle of a long AI response),
+lock is implemented on broadcasting (messages from the same client do not appear in the middle of a long AI response),
+long AI responses are sent in chunks and recontructed after reception,
 AI button sends AI request, server calls LLM, and returns the answer. 
 
 Technologies: Python, sockets, threading, tkinter, JSON, getenv, event queue, TLS, lock, requests and a free-tiered LLM API (https://openrouter.ai/nvidia/nemotron-3.5-super-vl:free)
@@ -39,4 +40,6 @@ Ask AI: The AI button sends a type flag, server routes the question, calls the L
 Possible improvements:
 authentication
 account creation and email verification, data in a JSON file or a DB
-message chunking (long ai responses trigger errors)
+global lock (not only the client asking, but all other clients can't send anything when AI is sending a long response)
+chunking messages to server (server can send long messages to clients, especially from AI, but clients are limited to around 1000 chars)
+OR limit message length on app client-side, before attempting to send to server
