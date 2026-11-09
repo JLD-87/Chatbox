@@ -1,6 +1,7 @@
 import socket
 import threading
 import json
+import struct
 import requests
 import os
 import ssl
@@ -24,39 +25,50 @@ server.listen()
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 
-
-# Save TLS secured sockets and nicknames in lists
+# Save TLS secured sockets and nicknames in lists, clients is a list of sockets themselves
 clients = []
 nicknames = []
 
+# Send messages to everyone in the clients list, with a lock to prevent race conditions
 def broadcast(message):
     message_dumped = json.dumps({"type": "MESSAGE", "content": message.decode('utf-8')}).encode('utf-8')
+    # Encode message length into a 4 bytes header
+    header = struct.pack('!I', len(message_dumped))
     print(f"Broadcasting message: {message.decode('utf-8')}")
+    # Use lock and send messages to all clients. The header sends the message length first, allowing for lengthy messages
     with send_lock:
         for tls_client in clients:
-            tls_client.sendall(message_dumped)
+            tls_client.sendall(header + message_dumped)
 
-
+# Broadcast the list of nicknames to all clients
 def broadcast_list_clients():
     client_list = json.dumps({"type": "CLIENT_LIST", "content": nicknames}).encode('utf-8')
+    # Encode message length into a 4 bytes header
+    header = struct.pack('!I', len(client_list))
     print(f"Broadcasting client list: {nicknames}")
     for tls_client in clients:
-        tls_client.send(client_list)
+        tls_client.sendall(header + client_list)
+
+# Request the nickname from the client, with 4-bytes header and type 'NICK'
+def request_nickname(tls_client):
+    nickname_request=json.dumps({"type": "NICK", "content": ""}).encode('utf-8')
+    header = struct.pack('!I', len(nickname_request))
+    tls_client.send(header + nickname_request)
+
+    nickname = tls_client.recv(1024).decode('utf-8')
+    nicknames.append(nickname)
+    clients.append(tls_client)
+    broadcast_list_clients()
+    broadcast(f"{nickname} has joined the chat!\n".encode('utf-8'))
 
 def handle_client(client):
     try:
+    #Connecting the client, its socket and nickname to the server, and broadcasting the new client's nickname to all other clients
         tls_client = context.wrap_socket(client, server_side=True)
-        print(f"TLS connection established with {tls_client.getpeername()}")
-        nickname_request=json.dumps({"type": "NICK", "content": ""}).encode('utf-8')
-        tls_client.send(nickname_request)
-        nickname = tls_client.recv(1024).decode('utf-8')
-        nicknames.append(nickname)
-        clients.append(tls_client)
-        broadcast_list_clients()
+        #print(f"TLS connection established with {tls_client.getpeername()}")
+        request_nickname(tls_client)
 
-        print(f"Nickname of the client is {nickname}")
-        broadcast(f"{nickname} has joined the chat!\n".encode('utf-8'))
-
+    # Main loop awaiting messages or Ai requests from clients
         while True:
             message = tls_client.recv(1024).decode('utf-8')
             print(f"{message}")
@@ -76,6 +88,7 @@ def handle_client(client):
     except (ConnectionError, OSError) as error:
         print(f"Connection error: {error}")
 
+    # Handle client disconnection and cleanup
     finally:
         print("A client has disconnected.")
 

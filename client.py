@@ -6,30 +6,37 @@ from tkinter import ttk
 import tkinter.scrolledtext as st
 from tkinter import simpledialog
 import json
+import struct
 import queue
 import os
 import ssl
 from dotenv import load_dotenv
 load_dotenv()
 
-#LOCALHOST='127.0.0.1'
-#PORT = 5000
+#Set host and port with data from environment variables
+'''
+Use localhost for testing
+LOCALHOST='127.0.0.1'
+PORT = 5000
+Else, put your public IP, and make sure to open the port in your router settings
+'''
 HOST=os.getenv('HOST')
-print(f"Connecting to server at {HOST}:{os.getenv('PORT')}")
 PORT = int(os.getenv('PORT'))
+
 
 class Client:
     def __init__(self,HOST,PORT):
+        #Create a TCP socket on opening the client
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # Wrap the socket with SSL
         context = ssl.create_default_context()
         context.load_verify_locations('./cert.pem')
         self.sock = context.wrap_socket(self.sock, server_hostname=HOST)
-
-
+        #Connect to the server
         self.sock.connect((HOST, PORT))
         print(f"Connecting to server at {HOST}:{PORT} with SSL")
 
+        # Prompt for nickname using a simple dialog window
         msg=tk.Tk()
         msg.withdraw()
         self.nickname = simpledialog.askstring("Nickname", "Please choose a nickname", parent=msg)
@@ -37,6 +44,7 @@ class Client:
         self.running = True
         self.gui_events = queue.Queue()
 
+        # Start a thread for each client to handle its main loop
         receive_thread = threading.Thread(target=self.receive_messages)
         receive_thread.start()
         self.gui_loop()
@@ -91,6 +99,7 @@ class Client:
         self.win.after(50, self.process_gui_events)
         self.win.mainloop()
 
+    # Send a question with header ASK_AI to the server when AI button is clicked, the server sends an API request, and the answer is broadcasted to all clients
     def ask_ai(self):
         question = self.input_area.get('1.0', 'end').strip()
         if question:
@@ -98,6 +107,7 @@ class Client:
             self.sock.send(question_dump)
             self.input_area.delete('1.0', 'end')
 
+    # Send a message with header MESSAGE to the server when Send button is clicked, the server broadcasts it to all clients
     def write(self):
         message = f"{self.nickname}: {self.input_area.get('1.0', 'end')}"
         message_dump = json.dumps({"type": "MESSAGE", "content": message}).encode('utf-8')
@@ -110,6 +120,7 @@ class Client:
         self.sock.close()
         exit(0)
 
+    # Write the list of clients in the GUI, on its own frame in list_area, and disable editing the list
     def write_client_list(self, clients):
         self.list_area.config(state='normal')
         self.list_area.delete('1.0', 'end')
@@ -118,12 +129,14 @@ class Client:
         print(f"Client list updated in GUI: {clients}")
         self.list_area.config(state='disabled')
 
+    # Write a message in the GUI, on its own frame in text_area, and disable editing past messages
     def write_message(self, message):
         self.text_area.config(state='normal')
         self.text_area.insert('end', f"{message}\n")
         self.text_area.yview('end')
         self.text_area.config(state='disabled')
 
+    # Main threadloop, awaits events from queue and writes them to the GUI, 50ms downtime to save CPU with 'after' method
     def process_gui_events(self):
         while True:
             try:
@@ -140,11 +153,31 @@ class Client:
         if self.running:
             self.win.after(50, self.process_gui_events)
 
+    # Receive exactly the specified number of bytes in chunks from the socket, and concatenate them, also used to receive headers in 4 bytes
+    def receive_exactly(self, length):
+        data = b''
+        while len(data) < length:
+            chunk = self.sock.recv(length - len(data))
+            if not chunk:
+                raise ConnectionError("Client disconnected")
+            data += chunk
+        return data
+
+    # Client thread that receives messages from the server, unpacks them, and put them in queue
     def receive_messages(self):
         while self.running:
             try:
-                message = self.sock.recv(1024).decode('utf-8')
-                message = json.loads(message)
+                 # First receive the 4-byte header
+                header = self.receive_exactly(4)
+
+                # Extract message length
+                message_length = struct.unpack('!I', header)[0]
+
+                # Receive the rest of the complete message with the exact length specified in the header
+                data = self.receive_exactly(message_length)
+                message = json.loads(data.decode('utf-8'))
+
+                # Queue the event for the GUI to process
                 self.gui_events.put((message['type'], message['content']))
                 print(f"Event queued: {message['type']} with content: {message['content']}")
 
