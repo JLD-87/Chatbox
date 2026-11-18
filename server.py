@@ -6,6 +6,7 @@ import requests
 import os
 import ssl
 from dotenv import load_dotenv
+import authentication
 
 #load environment variables from .env file
 load_dotenv()
@@ -29,6 +30,9 @@ context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 clients = []
 nicknames = []
 
+#Instantiate the authentication class
+auth = authentication.Auth_class()
+
 # Send messages to everyone in the clients list, with a lock to prevent race conditions
 def broadcast(message):
     message_dumped = json.dumps({"type": "MESSAGE", "content": message.decode('utf-8')}).encode('utf-8')
@@ -49,28 +53,70 @@ def broadcast_list_clients():
     for tls_client in clients:
         tls_client.sendall(header + client_list)
 
-# Request the nickname from the client, with 4-bytes header and type 'NICK'
-def request_nickname(tls_client):
-    nickname_request=json.dumps({"type": "NICK", "content": ""}).encode('utf-8')
-    header = struct.pack('!I', len(nickname_request))
-    tls_client.send(header + nickname_request)
+# Request the credentials from the client, with 4-bytes header
+def request_credentials(tls_client, message):
 
-    nickname = tls_client.recv(1024).decode('utf-8')
-    nicknames.append(nickname)
-    clients.append(tls_client)
-    broadcast_list_clients()
-    broadcast(f"{nickname} has joined the chat!\n".encode('utf-8'))
+    if message['type'] == 'REGISTER':
+                username = message['content']['username']
+                password = message['content']['password']
+                if authentication.Auth_class.register_user(auth, username, password):
+                    print(f"User '{username}' registered successfully.")
+                    cred_request = json.dumps({"type": "REGISTER", "content": {"username": username, "result": "success"}}).encode('utf-8')
+                    header = struct.pack('!I', len(cred_request))
+                    tls_client.sendall(header + cred_request)
+                    return False
+                else:
+                    print(f"Registration failed for user '{username}'.")
+                    cred_request = json.dumps({"type": "REGISTER", "content": {"username": username, "result": "failure"}}).encode('utf-8')
+                    header = struct.pack('!I', len(cred_request))
+                    tls_client.sendall(header + cred_request)
+                    return False  # Return False to indicate failed registration
+
+    elif message['type'] == 'LOGIN':
+                username = message['content']['username']
+                password = message['content']['password']
+                if authentication.Auth_class.authenticate_user(auth, username, password):
+                    print(f"User '{username}' authenticated successfully.")
+                    cred_request = json.dumps({"type": "LOGIN", "content": {"username": username, "result": "success"}}).encode('utf-8')
+                    header = struct.pack('!I', len(cred_request))
+                    tls_client.sendall(header + cred_request)
+                    nicknames.append(username)
+                    clients.append(tls_client)
+                    broadcast_list_clients()
+                    broadcast(f"{username} has joined the chat!\n".encode('utf-8'))
+                    return True  # Return True to indicate successful authentication
+                else:
+                    print(f"Authentication failed for user '{username}'.")
+                    cred_request = json.dumps({"type": "LOGIN", "content": {"username": username, "result": "failure"}}).encode('utf-8')
+                    header = struct.pack('!I', len(cred_request))
+                    tls_client.sendall(header + cred_request)
+                    return False  # Return False to indicate failed authentication
 
 def handle_client(client):
     try:
-    #Connecting the client, its socket and nickname to the server, and broadcasting the new client's nickname to all other clients
+        #Connecting the client, its socket and to the server, and broadcasting the new client's to all other clients
         tls_client = context.wrap_socket(client, server_side=True)
-        #print(f"TLS connection established with {tls_client.getpeername()}")
-        request_nickname(tls_client)
+
+        authenticated = False
+        while not authenticated:
+            credentials = tls_client.recv(1024).decode('utf-8')
+            if not credentials:
+                return  # Client disconnected
+            request = json.loads(credentials)
+
+            if not request_credentials(tls_client, request):
+                print("LOGIN FAILED: returning to authentication loop")
+                continue
+            authenticated = True
+
 
     # Main loop awaiting messages or Ai requests from clients
         while True:
             message = tls_client.recv(1024).decode('utf-8')
+
+            if not message:
+                break  # Client disconnected
+
             print(f"{message}")
             message=json.loads(message)
 
@@ -85,8 +131,12 @@ def handle_client(client):
                 print(f"{nicknames[clients.index(tls_client)]} sent message: {message}")
                 broadcast(message['content'].encode('utf-8'))
 
-    except (ConnectionError, OSError) as error:
+    except (ConnectionError, ssl.SSLError, OSError) as error:
         print(f"Connection error: {error}")
+
+    except Exception as e:
+        print(f"Authentication error: {type(e).__name__}: {e}")
+        raise
 
     # Handle client disconnection and cleanup
     finally:
@@ -94,7 +144,6 @@ def handle_client(client):
 
         if tls_client in clients:
             index = clients.index(tls_client)
-            nickname = nicknames[index]
 
             clients.pop(index)
             nicknames.pop(index)

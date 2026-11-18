@@ -10,6 +10,7 @@ import struct
 import queue
 import os
 import ssl
+import authentication
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -36,11 +37,6 @@ class Client:
         self.sock.connect((HOST, PORT))
         print(f"Connecting to server at {HOST}:{PORT} with SSL")
 
-        # Prompt for nickname using a simple dialog window
-        msg=tk.Tk()
-        msg.withdraw()
-        self.nickname = simpledialog.askstring("Nickname", "Please choose a nickname", parent=msg)
-
         self.running = True
         self.gui_events = queue.Queue()
 
@@ -49,7 +45,20 @@ class Client:
         receive_thread.start()
         self.gui_loop()
 
+    # Create the main GUI loop, and start the authentication GUI, and set the protocol for closing the window to stop the client
+    # Only once the user is authenticated, the main GUI is shown, and the authentication GUI is destroyed
     def gui_loop(self):
+        self.create_main_gui()
+        self.win.withdraw()
+        self.authentication_gui()
+
+        self.win.protocol("WM_DELETE_WINDOW", self.stop)
+        self.auth_win.protocol("WM_DELETE_WINDOW", self.stop)
+        self.win.after(50, self.process_gui_events)
+        self.win.mainloop()
+
+    # Create the main gui
+    def create_main_gui(self):
         self.win = tk.Tk()
         self.win.configure(bg="lightgray")
         self.win.title("Chat Client")
@@ -95,9 +104,27 @@ class Client:
         self.list_area.pack(padx=5, pady=5)
         self.list_area.config(state='disabled') #clients connected
 
-        self.win.protocol("WM_DELETE_WINDOW", self.stop)
-        self.win.after(50, self.process_gui_events)
-        self.win.mainloop()
+    # Create a login GUI for user authentication
+    def authentication_gui(self):
+        self.auth_win = tk.Toplevel(self.win)
+        self.auth_win.title("Authentication")
+        self.auth_win.geometry("300x200")
+
+        self.username_label = tk.Label(self.auth_win, text="Username:")
+        self.username_label.pack(pady=5)
+        self.username_entry = tk.Entry(self.auth_win)
+        self.username_entry.pack(pady=5)
+
+        self.password_label = tk.Label(self.auth_win, text="Password:")
+        self.password_label.pack(pady=5)
+        self.password_entry = tk.Entry(self.auth_win, show="*")
+        self.password_entry.pack(pady=5)
+
+        self.register_button = tk.Button(self.auth_win, text="Register", command=lambda: self.send_register_request(self.username_entry.get(), self.password_entry.get()))
+        self.register_button.pack(pady=5)
+
+        self.login_button = tk.Button(self.auth_win, text="Login", command=lambda: self.send_login_request(self.username_entry.get(), self.password_entry.get()))
+        self.login_button.pack(pady=5)
 
     # Send a question with header ASK_AI to the server when AI button is clicked, the server sends an API request, and the answer is broadcasted to all clients
     def ask_ai(self):
@@ -116,11 +143,19 @@ class Client:
 
     def stop(self):
         self.running = False
-        self.win.destroy()
+        try:
+
+            self.sock.shutdown(socket.SHUT_RDWR)
+
+        except OSError as e:
+            print(f"Shutdown error: {e}")
+
         self.sock.close()
-        exit(0)
+        print("Socket closed")
+        self.win.destroy()
 
     # Write the list of clients in the GUI, on its own frame in list_area, and disable editing the list
+    # The list is updated when the server sends a CLIENT_LIST event, upon connection or disconnection of a client.
     def write_client_list(self, clients):
         self.list_area.config(state='normal')
         self.list_area.delete('1.0', 'end')
@@ -143,12 +178,25 @@ class Client:
                 event_type, payload = self.gui_events.get_nowait()
             except queue.Empty:
                 break
+            if event_type == "DISCONNECT":
+                self.stop()
             if event_type == 'CLIENT_LIST':
                 self.write_client_list(payload)
             elif event_type == 'MESSAGE':
                 self.write_message(payload)
-            elif event_type == 'NICK':
-                self.sock.send(self.nickname.encode('utf-8'))
+            elif event_type== "REGISTER":
+                if payload["result"] == "success":
+                    print("Registration successful.")
+                else:
+                    print("Registration failed.")
+            elif event_type == "LOGIN":
+                if payload["result"] == "success":
+                    self.nickname = payload["username"]
+                    print("Login successful.")
+                    self.auth_win.destroy()
+                    self.win.deiconify()
+                else:
+                    print("Login failed.")
 
         if self.running:
             self.win.after(50, self.process_gui_events)
@@ -184,9 +232,23 @@ class Client:
             except ConnectionAbortedError:
                 print("Connection closed by the server.")
                 break
+            except (OSError, ssl.SSLError) as e:
+                print(f"Socket error: {e}")
+                self.gui_events.put(("DISCONNECT", None))
+                break
             except:
                 print("An error occurred while receiving messages.")
                 self.sock.close()
                 break
+
+    # On pressing the Register button, send a REGISTER request to the server with the username and password in JSON format
+    def send_register_request(self, username, password):
+        request = json.dumps({"type": "REGISTER", "content": {"username": username, "password": password}}).encode('utf-8')
+        self.sock.send(request)
+
+    # On pressing the Login button, send a LOGIN request to the server with the username and password in JSON format
+    def send_login_request(self, username, password):
+        request = json.dumps({"type": "LOGIN", "content": {"username": username, "password": password}}).encode('utf-8')
+        self.sock.send(request)
 
 client = Client(HOST, PORT)

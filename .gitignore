@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Certificates and private keys
+*.pem
+*.key
+*.crt
+
+# Virtual environment
+venv/
+.venv/

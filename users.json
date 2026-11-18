@@ -1,0 +1,10 @@
+{
+    "aaa": {
+        "password": "$argon2id$v=19$m=65536,t=3,p=4$zL/BsXhnVRj5atLITgKyPA$OvoZKWWNI+WHvTGwYq7FXvXskaLPeJK7nCLoQ5rCuNI",
+        "nickname": "aaa"
+    },
+    "bbb": {
+        "password": "$argon2id$v=19$m=65536,t=3,p=4$2ljH3vsV8Jqby3K0NnTamQ$IIWJqa5oyvQLh3iYosveYvTMEhEYOD1ayDdNvYH/IFI",
+        "nickname": "bbb"
+    }
+}
