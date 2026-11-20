@@ -1,16 +1,14 @@
-from multiprocessing import context
 import socket
 import threading
 import tkinter as tk
 from tkinter import ttk
 import tkinter.scrolledtext as st
-from tkinter import simpledialog
+from tkinter import messagebox
 import json
 import struct
 import queue
 import os
 import ssl
-import authentication
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -180,26 +178,50 @@ class Client:
                 break
             if event_type == "DISCONNECT":
                 self.stop()
-            if event_type == 'CLIENT_LIST':
+
+            elif event_type == 'CLIENT_LIST':
                 self.write_client_list(payload)
+
             elif event_type == 'MESSAGE':
                 self.write_message(payload)
+
             elif event_type== "REGISTER":
-                if payload["result"] == "success":
-                    print("Registration successful.")
-                else:
-                    print("Registration failed.")
+                self.handle_register_response(payload)
+
             elif event_type == "LOGIN":
-                if payload["result"] == "success":
-                    self.nickname = payload["username"]
-                    print("Login successful.")
-                    self.auth_win.destroy()
-                    self.win.deiconify()
-                else:
-                    print("Login failed.")
+                self.handle_login_response(payload)
 
         if self.running:
             self.win.after(50, self.process_gui_events)
+
+    # Handle server's response to register
+    def handle_register_response(self, payload):
+        if payload["result"] == "success":
+            messagebox.showinfo(
+                "Registration successful",
+                "Your account has been created."
+            )
+        else:
+            messagebox.showerror(
+                "Registration failed",
+                "Registration failed. Please try again."
+            )
+
+    # Handle server's response to login, closing the authentication window and opening the main GUI if successful, or showing an error message if failed
+    def handle_login_response(self, payload):
+        if payload["result"] == "success":
+            self.nickname = payload["username"]
+            messagebox.showinfo(
+                "Login successful",
+                "You have been logged in."
+            )
+            self.auth_win.destroy()
+            self.win.deiconify()
+        else:
+            messagebox.showerror(
+                "Login failed",
+                "Login failed. Please try again."
+            )
 
     # Receive exactly the specified number of bytes in chunks from the socket, and concatenate them, also used to receive headers in 4 bytes
     def receive_exactly(self, length):
