@@ -1,15 +1,21 @@
+# Standard library
+import json
+import os
+import queue
 import socket
+import ssl
+import struct
 import threading
+
+# Third-party libraries
+from dotenv import load_dotenv
+
+# GUI
 import tkinter as tk
+from tkinter import messagebox
 from tkinter import ttk
 import tkinter.scrolledtext as st
-from tkinter import messagebox
-import json
-import struct
-import queue
-import os
-import ssl
-from dotenv import load_dotenv
+
 load_dotenv()
 
 #Set host and port with data from environment variables
@@ -134,7 +140,7 @@ class Client:
 
     # Send a message with header MESSAGE to the server when Send button is clicked, the server broadcasts it to all clients
     def write(self):
-        message = f"{self.nickname}: {self.input_area.get('1.0', 'end')}"
+        message = f"{self.nickname}: {self.input_area.get('1.0', 'end-1c')}"
         message_dump = json.dumps({"type": "MESSAGE", "content": message}).encode('utf-8')
         self.sock.send(message_dump)
         self.input_area.delete('1.0', 'end')

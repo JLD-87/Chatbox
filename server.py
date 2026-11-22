@@ -1,17 +1,26 @@
-import socket
-import threading
+# Standard library
 import json
-import struct
-import requests
 import os
+import socket
 import ssl
+import struct
+import threading
+import queue
+import time
+from datetime import datetime
+
+# Third-party libraries
+import requests
 from dotenv import load_dotenv
+
+# Local modules
 import authentication
 
 #load environment variables from .env file
 load_dotenv()
 
-HOST ='0.0.0.0' #localhost='127.0.0.1'
+# Constants
+HOST ='0.0.0.0' #listens all ports, put localhost='127.0.0.1' for testing
 PORT = 5000
 llm_api_key=os.getenv('LLM_API_KEY')
 
@@ -26,12 +35,14 @@ server.listen()
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 
-# Save TLS secured sockets and nicknames in lists, clients is a list of sockets themselves
-clients = []
-nicknames = []
+# Save TLS secured sockets and nicknames in a dictionary
+clients = {}
 
 #Instantiate the authentication class
 auth = authentication.Auth_class()
+
+# Create queue to save history
+history_queue = queue.Queue()
 
 # Send messages to everyone in the clients list, with a lock to prevent race conditions
 def broadcast(message):
@@ -41,16 +52,16 @@ def broadcast(message):
     print(f"Broadcasting message: {message.decode('utf-8')}")
     # Use lock and send messages to all clients. The header sends the message length first, allowing for lengthy messages
     with send_lock:
-        for tls_client in clients:
+        for tls_client in clients.keys():
             tls_client.sendall(header + message_dumped)
 
 # Broadcast the list of nicknames to all clients
 def broadcast_list_clients():
-    client_list = json.dumps({"type": "CLIENT_LIST", "content": nicknames}).encode('utf-8')
+    client_list = json.dumps({"type": "CLIENT_LIST", "content": list(clients.values())}).encode('utf-8')
     # Encode message length into a 4 bytes header
     header = struct.pack('!I', len(client_list))
-    print(f"Broadcasting client list: {nicknames}")
-    for tls_client in clients:
+    print(f"Broadcasting client list: {list(clients.values())}")
+    for tls_client in clients.keys():
         tls_client.sendall(header + client_list)
 
 # Authentication GUI can send either a register or login request, this function calls the appropriate handler
@@ -85,8 +96,7 @@ def handle_login(tls_client, username, password):
 
         send_auth_response(tls_client, "LOGIN", username, "success")
 
-        nicknames.append(username)
-        clients.append(tls_client)
+        clients[tls_client] = username
 
         broadcast_list_clients()
         broadcast(f"{username} has joined the chat!\n".encode('utf-8'))
@@ -168,11 +178,32 @@ def process_message(tls_client, message):
         handle_ai_request(message)
 
     elif message['type'] == 'MESSAGE':
+        message["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        history_queue.put(message)
         handle_chat_message(tls_client, message)
+
+# Saves chat history to a JSON file in a separate thread to avoid blocking the main server thread
+def save_chat_history_thread():
+    while True:
+        message = history_queue.get()
+        print("History worker received:", message)
+        try:
+            save_message(message)
+        finally:
+            history_queue.task_done()
+
+def save_message(message):
+    history_message = message.copy()
+    history_message.pop("type", None)
+
+    with open(auth.CHAT_HISTORY_FILE, "a", encoding="utf-8") as file:
+        json.dump(history_message, file, ensure_ascii=False)
+        file.write("\n")
 
 # Handles chat messages by broadcasting them to all clients
 def handle_chat_message(tls_client, message):
-    print(f"{nicknames[clients.index(tls_client)]} sent message: {message}")
+    username = clients.get(tls_client, "Unknown")
+    print(f"{username} sent message: {message}")
     broadcast(message['content'].encode('utf-8'))
 
 # Handles AI requests by sending a POST request to the OpenRouter API with the user's question and returns the AI's response
@@ -193,13 +224,11 @@ def cleanup_client(tls_client):
 
     print("A client has disconnected.")
 
-    if tls_client in clients:
-        index = clients.index(tls_client)
+    username = clients.pop(tls_client, None)
 
-        clients.pop(index)
-        nicknames.pop(index)
-
+    if username is not None:
         broadcast_list_clients()
+        broadcast(f"{username} has left the chat!".encode('utf-8'))
 
     tls_client.close()
 
@@ -241,7 +270,17 @@ def ask_openrouter(question):
     response = response['choices'][0]['message']
     return response.get('content')
 
+#Main entry point of the server, starts the chat history saving thread and begins accepting connections
 
+# Initialize files
+auth.create_users_file()
+auth.create_chat_history_file()
+
+history_thread = threading.Thread(
+    target=save_chat_history_thread,
+    daemon=True
+)
+history_thread.start()
 
 # Start the server and begin accepting connections
 print("Server is running and ready to accept connections...")

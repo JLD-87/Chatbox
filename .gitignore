@@ -13,3 +13,7 @@ __pycache__/
 # Virtual environment
 venv/
 .venv/
+
+#JSON
+users.json
+chat_history.jsonl

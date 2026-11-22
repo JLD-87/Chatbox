@@ -7,26 +7,28 @@ from argon2.exceptions import (
 import json
 import os
 
-#absolute path to the users.json file
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-USERS_FILE = os.path.join(BASE_DIR, "users.json")
 
 class Auth_class:
 
     def __init__(self):
-        self.create_users_file()
-        self.users = self.load_users()
         self.ph = PasswordHasher()
         self.users_lock = threading.Lock()
+        #absolute path to the json files
+        self.BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        self.USERS_FILE = os.path.join(self.BASE_DIR, "users.json")
+        self.CHAT_HISTORY_FILE = os.path.join(self.BASE_DIR, "chat_history.jsonl")
+        self.create_users_file()
+        self.create_chat_history_file()
+        self.users = self.load_users()
 
     # Read json file and return a dictionary of users
     def load_users(self):
-        with open(USERS_FILE, "r") as file:
+        with open(self.USERS_FILE, "r") as file:
             return json.load(file)
 
     # Save a json file
     def save_user(self):
-        with open(USERS_FILE, "w") as file:
+        with open(self.USERS_FILE, "w") as file:
             json.dump(self.users, file, indent=4)
 
     # Register a new user
@@ -75,6 +77,11 @@ class Auth_class:
 
     # Creates the users.json file if it doesn't exist
     def create_users_file(self):
-        if not os.path.exists(USERS_FILE):
-            with open(USERS_FILE, "w") as file:
+        if not os.path.exists(self.USERS_FILE):
+            with open(self.USERS_FILE, "w") as file:
                 json.dump({}, file, indent=4)
+
+    # Creates the chat_history.json file if it doesn't exist
+    def create_chat_history_file(self):
+        if not os.path.exists(self.CHAT_HISTORY_FILE):
+            open(self.CHAT_HISTORY_FILE, "w", encoding="utf-8").close()

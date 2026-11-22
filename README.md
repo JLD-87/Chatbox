@@ -6,7 +6,7 @@ This project is a Python client-server chat application with LLM integration.
 Features: 
 
 multiple clients can connect, 
-messages sent and received, 
+messages sent and received, timestamped and saved in history,
 connected client list shown,
 connection is encrypted with TLS (server's identity is verified by a self-signed certificate),
 lock is implemented on broadcasting (messages from the same client do not appear in the middle of a long AI response),
@@ -14,11 +14,11 @@ long AI responses are sent in chunks and recontructed after reception,
 AI button sends AI request, server calls LLM, and returns the answer,
 clients need to register with username and password, data is saved in json, lock prevents race conditions on writing the file.
 
-Technologies: Python, sockets, threading, tkinter, JSON, getenv, event queue, TLS, lock, register and login, robust exiting, requests and a free-tiered LLM API (https://openrouter.ai/nvidia/nemotron-3.5-super-vl:free)
+Technologies: Python, sockets, threading, tkinter, JSON and JSONL, getenv, event queue, TLS, lock, register and login, robust exiting, requests and a free-tiered LLM API (https://openrouter.ai/nvidia/nemotron-3.5-super-vl:free)
 
 Project structure:
-client.py : It contains the code for the server launch.
-server.py : It contains the code for the client. It connects to the server, locally or over the net depending on your setup.
+server.py : It contains the code for the server launch.
+client.py : It contains the code for the client. It connects to the server, locally or over the net depending on your setup.
 authentication.py: The code manipulates data from the json file to write or check users information for logging.
 .env : It contains your environment variables. HOST(host ip adress), PORT(used by the app), LLM_API_KEY (create it on the website mentionned before). Keep your API key in .env, not in the code.
 README.md
@@ -45,7 +45,6 @@ Ask AI: The AI button sends a type flag, server routes the question, calls the L
 
 Possible improvements:
 add a logger,
-save list of clients and usernames in a dictionnary for easier manipulation and closing,
 email verification, data in a JSON file or a DB
 global lock (not only the client asking, but all other clients can't send anything when AI is sending a long response)
 chunking messages to server (server can send long messages to clients, especially from AI, but clients are limited to around 1000 chars)
@@ -94,3 +93,10 @@ Robust authentication
 - Deploy it to AWS.
 - Configure persistent storage.
 - Add monitoring and server logs.
+
+22/11/26
+- automatically create a chat history file in jsonl, the server doesnt need to read the full history to add a line
+- save message into chat_history, username and content message are not seperated yet
+- clients socks and username are now saved in a unique dictionnary
+- message are sent into history via a queue
+- on server launch, json files are created, and a thread dedicated to chat history is launched
