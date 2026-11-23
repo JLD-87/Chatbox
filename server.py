@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 # Local modules
 import authentication
+from protocol import encode_frame, recv_json, send_json
 
 #load environment variables from .env file
 load_dotenv()
@@ -25,15 +26,12 @@ PORT = 5000
 llm_api_key=os.getenv('LLM_API_KEY')
 
 send_lock = threading.Lock()  # Create a lock for sending messages
+login_lock = threading.Lock()
 
-# Create a TCP socket
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((HOST,PORT))
-server.listen()
+server = None
+context = None 
+MAX_CHAT_LENGTH = 2000
 
-# Wrap socket with SSL
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 
 # Save TLS secured sockets and nicknames in a dictionary
 clients = {}
@@ -44,25 +42,28 @@ auth = authentication.Auth_class()
 # Create queue to save history
 history_queue = queue.Queue()
 
+# Send one ready-made frame to every connected client, without letting one bad client affect the others
+def send_to_all(frame):
+    with send_lock:
+        for tls_client in list(clients):      # snapshot: safe even if another thread changes clients
+            try:
+                tls_client.sendall(frame)
+            except OSError:
+                # Dead connection: close it, its own thread will notice and run cleanup_client
+                try:
+                    tls_client.close()
+                except OSError:
+                    pass
+
 # Send messages to everyone in the clients list, with a lock to prevent race conditions
 def broadcast(message):
-    message_dumped = json.dumps({"type": "MESSAGE", "content": message.decode('utf-8')}).encode('utf-8')
-    # Encode message length into a 4 bytes header
-    header = struct.pack('!I', len(message_dumped))
     print(f"Broadcasting message: {message.decode('utf-8')}")
-    # Use lock and send messages to all clients. The header sends the message length first, allowing for lengthy messages
-    with send_lock:
-        for tls_client in clients.keys():
-            tls_client.sendall(header + message_dumped)
+    send_to_all(encode_frame({"type": "MESSAGE", "content": message.decode('utf-8')}))
 
 # Broadcast the list of nicknames to all clients
 def broadcast_list_clients():
-    client_list = json.dumps({"type": "CLIENT_LIST", "content": list(clients.values())}).encode('utf-8')
-    # Encode message length into a 4 bytes header
-    header = struct.pack('!I', len(client_list))
     print(f"Broadcasting client list: {list(clients.values())}")
-    for tls_client in clients.keys():
-        tls_client.sendall(header + client_list)
+    send_to_all(encode_frame({"type": "CLIENT_LIST", "content": list(clients.values())}))
 
 # Authentication GUI can send either a register or login request, this function calls the appropriate handler
 # Only a succesful login returns true, allowing the client to enter the messaging system.
@@ -91,35 +92,38 @@ def handle_register(tls_client, username, password):
 # Handles login requests, authentication logic is in the authentication.py module
 # On successful login, the client is added to the clients list and the nickname is added to the nicknames list, allowing for messaging
 def handle_login(tls_client, username, password):
+
     if auth.authenticate_user(username, password):
+
         print(f"User '{username}' authenticated successfully.")
 
-        send_auth_response(tls_client, "LOGIN", username, "success")
+        with login_lock:
 
-        clients[tls_client] = username
+            # Check if this account is already connected
+            already_logged_in = username in clients.values()
+
+            if not already_logged_in:
+                clients[tls_client] = username
+
+        if already_logged_in:
+            send_auth_response(tls_client, "LOGIN", username, "failure")
+            return False
+
+        send_auth_response(tls_client, "LOGIN", username, "success")
 
         broadcast_list_clients()
         broadcast(f"{username} has joined the chat!\n".encode('utf-8'))
 
-        return True # Return True to indicate successful authentication
+        return True
 
     else:
         print(f"Authentication failed for user '{username}'.")
         send_auth_response(tls_client, "LOGIN", username, "failure")
-        return False # Return False to indicate failed authentication
+        return False
 
 # Packages the authentication response into a json message and sends it to the client, with a header indicating the message length
 def send_auth_response(tls_client, event_type, username, result):
-    response = json.dumps({
-        "type": event_type,
-        "content": {
-            "username": username,
-            "result": result
-        }
-    }).encode("utf-8")
-
-    header = struct.pack('!I', len(response))
-    tls_client.sendall(header + response)
+    send_json(tls_client, {"type": event_type, "content": {"username": username, "result": result}})
 
 #Main loops, first for login, second for messaging, clean up if the client disconnects
 def handle_client(client):
@@ -138,20 +142,18 @@ def handle_client(client):
 
         # Main loop awaiting messages or Ai requests from clients
         while True:
-            message = tls_client.recv(1024).decode('utf-8')
 
-            if not message:
-                break  # Client disconnected
-
-            message=json.loads(message)
+            message = recv_json(tls_client)
             process_message(tls_client, message)
 
     except (ConnectionError, ssl.SSLError, OSError) as error:
         print(f"Connection error: {error}")
 
+    except (ValueError, KeyError, TypeError) as error:   # includes JSONDecodeError
+        print(f"Bad message, dropping client: {error}")
+
     except Exception as e:
-        print(f"Authentication error: {type(e).__name__}: {e}")
-        raise
+        print(f"Unexpected error: {type(e).__name__}: {e}")
 
     # Handle client disconnection and cleanup
     finally:
@@ -160,13 +162,7 @@ def handle_client(client):
 # Handles authentication and registeration
 def authenticate_client(tls_client):
     while True:
-        credentials = tls_client.recv(1024).decode('utf-8')
-
-        #check if the client disconnected, server receives an empty string when the client disconnects
-        if not credentials:
-            return False
-
-        request = json.loads(credentials)
+        request = recv_json(tls_client)
 
         if request_credentials(tls_client, request):
             return True
@@ -175,9 +171,17 @@ def authenticate_client(tls_client):
 def process_message(tls_client, message):
 
     if message['type'] == 'ASK_AI':
-        handle_ai_request(message)
+        handle_ai_request(tls_client, message)
 
     elif message['type'] == 'MESSAGE':
+
+        content = message.get("content", "")
+
+        if not isinstance(content, str) or not content.strip():
+            return
+        if len(content) > MAX_CHAT_LENGTH:
+            return
+        
         message["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         history_queue.put(message)
         handle_chat_message(tls_client, message)
@@ -187,8 +191,13 @@ def save_chat_history_thread():
     while True:
         message = history_queue.get()
         print("History worker received:", message)
+
         try:
             save_message(message)
+
+        except Exception as e:
+            print(f"Failed to save chat history: {e}")
+
         finally:
             history_queue.task_done()
 
@@ -203,14 +212,25 @@ def save_message(message):
 # Handles chat messages by broadcasting them to all clients
 def handle_chat_message(tls_client, message):
     username = clients.get(tls_client, "Unknown")
-    print(f"{username} sent message: {message}")
-    broadcast(message['content'].encode('utf-8'))
+    if username is None:
+        return
+
+    content = message.get("content", "")
+
+    print(f"{username} sent message: {content}")
+
+    broadcast(f"{username}: {content}".encode("utf-8"))
 
 # Handles AI requests by sending a POST request to the OpenRouter API with the user's question and returns the AI's response
-def handle_ai_request(message):
+def handle_ai_request(tls_client, message):
+    username = clients.get(tls_client)
+
+    if username is None:
+        return
+
     question = message['content']
 
-    broadcast(f"{message['user']}: {question}".encode('utf-8'))
+    broadcast(f"{username}: {question}".encode('utf-8'))
     broadcast("AI is thinking...".encode('utf-8'))
 
     answer = ask_openrouter(question)
@@ -224,13 +244,17 @@ def cleanup_client(tls_client):
 
     print("A client has disconnected.")
 
-    username = clients.pop(tls_client, None)
+    with login_lock:
+        username = clients.pop(tls_client, None)
 
     if username is not None:
         broadcast_list_clients()
         broadcast(f"{username} has left the chat!".encode('utf-8'))
 
-    tls_client.close()
+    try:
+        tls_client.close()
+    except OSError:
+        pass
 
 # Listens for incoming connections and starts a new thread for each client
 def receive_connections():
@@ -245,43 +269,73 @@ def receive_connections():
         thread.start()
 
 # Sends a POST request to the OpenRouter API with the user's question and returns the AI's response
-def ask_openrouter(question):  
-    # First API call with reasoning
-    response = requests.post(
-    url="https://openrouter.ai/api/v1/chat/completions",
-    headers={
-        "Authorization": f"Bearer {llm_api_key}",
-        "Content-Type": "application/json",
-    },
-    data=json.dumps({
-        "model": "nvidia/nemotron-3.5-super-vl:free",
-        "messages": [
-            {
-            "role": "user",
-            "content": question
-            }
-        ],
-        "reasoning": {"enabled": True}
-    })
-    )
+def ask_openrouter(question):
 
-    # Extract the assistant message with reasoning_details
-    response = response.json()
-    response = response['choices'][0]['message']
-    return response.get('content')
+    try:
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {llm_api_key}",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps({
+                "model": "nvidia/nemotron-3.5-super-vl:free",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": question
+                    }
+                ],
+                "reasoning": {"enabled": True}
+            }),
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
 
-#Main entry point of the server, starts the chat history saving thread and begins accepting connections
+    except (requests.RequestException, ValueError) as e:
+        print(f"OpenRouter request error: {e}")
+        return "AI response unavailable."
 
-# Initialize files
-auth.create_users_file()
-auth.create_chat_history_file()
+    choices = data.get("choices")
 
-history_thread = threading.Thread(
-    target=save_chat_history_thread,
-    daemon=True
-)
-history_thread.start()
+    if not isinstance(choices, list) or not choices:
+        return "AI response unavailable."
 
-# Start the server and begin accepting connections
-print("Server is running and ready to accept connections...")
-receive_connections()
+    message = choices[0].get("message", {})
+
+    if not isinstance(message, dict):
+        return "AI response unavailable."
+
+    content = message.get("content")
+
+    if not isinstance(content, str) or not content.strip():
+        return "AI response unavailable."
+
+    return content
+
+def main():
+    global server, context
+    
+    # Create a TCP socket
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST, PORT))
+    server.listen()
+
+    # Wrap socket with SSL
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
+
+    # Initialize files
+    auth.create_users_file()
+    auth.create_chat_history_file()
+
+    history_thread = threading.Thread(target=save_chat_history_thread, daemon=True)
+    history_thread.start()
+
+    # Start the server and begin accepting connections
+    print("Server is running and ready to accept connections...")
+    receive_connections()
+
+if __name__ == "__main__":
+    main()

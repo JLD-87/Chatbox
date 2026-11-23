@@ -17,3 +17,7 @@ venv/
 #JSON
 users.json
 chat_history.jsonl
+
+#tests
+tests/
+pytest.ini

@@ -100,3 +100,12 @@ Robust authentication
 - clients socks and username are now saved in a unique dictionnary
 - message are sent into history via a queue
 - on server launch, json files are created, and a thread dedicated to chat history is launched
+
+23/11/26
+- bug fixes using claude and pytests
+double connection on same account
+malformed or empty messages sent and saved in history
+max message length added
+impersonation blocked
+save_history worker survive a failed save
+bugs and errors on api request to AI are caught

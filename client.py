@@ -16,6 +16,9 @@ from tkinter import messagebox
 from tkinter import ttk
 import tkinter.scrolledtext as st
 
+# Local modules
+from protocol import recv_json, send_json
+
 load_dotenv()
 
 #Set host and port with data from environment variables
@@ -133,16 +136,24 @@ class Client:
     # Send a question with header ASK_AI to the server when AI button is clicked, the server sends an API request, and the answer is broadcasted to all clients
     def ask_ai(self):
         question = self.input_area.get('1.0', 'end').strip()
+
         if question:
-            question_dump = json.dumps({"type": "ASK_AI", "user": self.nickname, "content": question}).encode('utf-8')
-            self.sock.send(question_dump)
+            send_json(self.sock, {
+                "type": "ASK_AI",
+                "content": question
+            })
+
             self.input_area.delete('1.0', 'end')
 
     # Send a message with header MESSAGE to the server when Send button is clicked, the server broadcasts it to all clients
     def write(self):
-        message = f"{self.nickname}: {self.input_area.get('1.0', 'end-1c')}"
-        message_dump = json.dumps({"type": "MESSAGE", "content": message}).encode('utf-8')
-        self.sock.send(message_dump)
+        message = self.input_area.get('1.0', 'end-1c')
+
+        send_json(self.sock, {
+            "type": "MESSAGE",
+            "content": message
+        })
+
         self.input_area.delete('1.0', 'end')
 
     def stop(self):
@@ -229,29 +240,11 @@ class Client:
                 "Login failed. Please try again."
             )
 
-    # Receive exactly the specified number of bytes in chunks from the socket, and concatenate them, also used to receive headers in 4 bytes
-    def receive_exactly(self, length):
-        data = b''
-        while len(data) < length:
-            chunk = self.sock.recv(length - len(data))
-            if not chunk:
-                raise ConnectionError("Client disconnected")
-            data += chunk
-        return data
-
     # Client thread that receives messages from the server, unpacks them, and put them in queue
     def receive_messages(self):
         while self.running:
             try:
-                 # First receive the 4-byte header
-                header = self.receive_exactly(4)
-
-                # Extract message length
-                message_length = struct.unpack('!I', header)[0]
-
-                # Receive the rest of the complete message with the exact length specified in the header
-                data = self.receive_exactly(message_length)
-                message = json.loads(data.decode('utf-8'))
+                message = recv_json(self.sock)
 
                 # Queue the event for the GUI to process
                 self.gui_events.put((message['type'], message['content']))
@@ -271,12 +264,10 @@ class Client:
 
     # On pressing the Register button, send a REGISTER request to the server with the username and password in JSON format
     def send_register_request(self, username, password):
-        request = json.dumps({"type": "REGISTER", "content": {"username": username, "password": password}}).encode('utf-8')
-        self.sock.send(request)
+        send_json(self.sock, {"type": "REGISTER", "content": {"username": username, "password": password}})
 
     # On pressing the Login button, send a LOGIN request to the server with the username and password in JSON format
     def send_login_request(self, username, password):
-        request = json.dumps({"type": "LOGIN", "content": {"username": username, "password": password}}).encode('utf-8')
-        self.sock.send(request)
+        send_json(self.sock, {"type": "LOGIN", "content": {"username": username, "password": password}})
 
 client = Client(HOST, PORT)

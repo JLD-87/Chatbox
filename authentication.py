@@ -2,7 +2,8 @@ import threading
 from argon2 import PasswordHasher
 from argon2.exceptions import (
     VerifyMismatchError,
-    VerificationError
+    VerificationError,
+    InvalidHashError,
 )
 import json
 import os
@@ -33,7 +34,10 @@ class Auth_class:
 
     # Register a new user
     def register_user(self, username, password):
-
+        if not username.strip() or not password:
+            print("Registration failed: username and password are required.")
+            return False
+        
         with self.users_lock:
 
             if username in self.users:
@@ -72,7 +76,7 @@ class Auth_class:
         try:
             return self.ph.verify(stored_hash, password)
 
-        except VerificationError:
+        except (VerificationError, InvalidHashError):
             return False
 
     # Creates the users.json file if it doesn't exist
